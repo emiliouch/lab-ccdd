@@ -1,16 +1,17 @@
 # MDS7202 - Laboratorio de Programación Científica para Ciencia de Datos
 
-Repositorio del curso MDS7202 (Otoño 2026), Facultad de Ciencias Físicas y Matemáticas, Universidad de Chile.
+Repositorio del curso MDS7202, Facultad de Ciencias Físicas y Matemáticas, Universidad de Chile.
 
 ## Integrantes
 
 | Nombre | GitHub |
 |--------|--------|
-| Alexander Sacchetti | [@usuario1](https://github.com/AlexanderSV25) |
-| Emilio Torres | [@usuario2](https://github.com/emiliouch) |
+| Nombre Apellido 1 | [@usuario1](https://github.com/usuario1) |
+| Nombre Apellido 2 | [@usuario2](https://github.com/usuario2) |
 
 ## Estructura del repositorio
 
+```text
 .
 ├── .github/
 │   ├── workflows/
@@ -19,12 +20,17 @@ Repositorio del curso MDS7202 (Otoño 2026), Facultad de Ciencias Físicas y Mat
 ├── labs/
 │   ├── lab_1/
 │   └── ...
-├── pyproject.toml
-├── .github/
+├── .gitignore
 ├── .pre-commit-config.yaml
-└── README.md
+├── .python-version
+├── pyproject.toml
+├── README.md
+└── uv.lock
+```
 
 ## Configuración del entorno
 
+```bash
 uv sync --locked --all-groups
 uv run pre-commit install
+```
