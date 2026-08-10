@@ -6,8 +6,8 @@ Repositorio del curso MDS7202, Facultad de Ciencias Físicas y Matemáticas, Uni
 
 | Nombre | GitHub |
 |--------|--------|
-| Nombre Apellido 1 | [@usuario1](https://github.com/usuario1) |
-| Nombre Apellido 2 | [@usuario2](https://github.com/usuario2) |
+| Alexander Sacchetti | [@AlexanderSV25](https://github.com/AlexanderSV25) |
+| Emilio Torres | [@emiliouch](https://github.com/emiliouch) |
 
 ## Estructura del repositorio
 
