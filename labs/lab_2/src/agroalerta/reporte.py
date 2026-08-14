@@ -1,7 +1,4 @@
-def contar_riesgos(
-    sensores: list,
-    lecturas: dict[str, list[float]],
-) -> dict[str, int]:
+def contar_riesgos(sensores: list, lecturas: dict) -> dict[str, int]:
     conteo: dict[str, int] = {}
     for sensor in sensores:
         valores = lecturas.get(sensor.nombre, [])
