@@ -43,7 +43,7 @@ MESES = {
     periodo: numero for numero, periodo in enumerate(PERIODOS_MENSUALES, 1)
 }
 
-ESQUEMA_CRU: dict[str, pl.DataType] = {
+ESQUEMA_CRU: dict[str, type[pl.DataType]] = {
     "country": pl.String,
     "iso_alpha2": pl.String,
     "iso_alpha3": pl.String,
