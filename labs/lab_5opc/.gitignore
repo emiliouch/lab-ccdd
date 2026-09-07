@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+data/interim/*
+!data/interim/.gitignore
+data/processed/*
+!data/processed/.gitignore
+reports/figures/*
+!reports/figures/.gitignore
