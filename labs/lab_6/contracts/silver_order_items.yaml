@@ -1,0 +1,31 @@
+table: silver.order_items
+purpose: Conservar items de orden con precios y fletes no negativos y finitos.
+grain: Una fila por order_id y order_item_id.
+primary_key: [order_id, order_item_id]
+owner: Equipo de datos Pudubella
+lineage: [bronze.order_items]
+classification: interno
+required_columns:
+  - order_id
+  - order_item_id
+  - price
+  - freight_value
+column_types:
+  order_id: string
+  order_item_id: integer
+  price: float
+  freight_value: float
+allow_empty: false
+constraints:
+  order_id:
+    nullable: false
+  order_item_id:
+    nullable: false
+  price:
+    nullable: false
+    minimum: 0
+    finite: true
+  freight_value:
+    nullable: false
+    minimum: 0
+    finite: true
