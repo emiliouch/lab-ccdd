@@ -25,10 +25,13 @@ def connect_lake(lake_dir: Path) -> duckdb.DuckDBPyConnection:
             "No se pudo cargar DuckLake. Ejecuten la preparación del "
             "ambiente antes de iniciar el flow."
         ) from error
-    catalog_uri = f"ducklake:{catalog}".replace("'", "''")
-    data_path = str(files).replace("'", "''")
+
+    # Normalizar rutas para Windows (barras '/' y escape de comillas)
+    catalog_uri = f"ducklake:{catalog.as_posix()}".replace("'", "''")
+    data_path = files.as_posix().replace("'", "''")
+
     connection.execute(
-        f"ATTACH '{catalog_uri}' AS olist (DATA_PATH '{data_path}')"
+        f"ATTACH '{catalog_uri}' AS olist (DATA_PATH '{data_path}', OVERRIDE_DATA_PATH TRUE)"
     )
     connection.execute("USE olist")
     for layer in ("bronze", "silver", "gold"):

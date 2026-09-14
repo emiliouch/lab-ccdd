@@ -1,11 +1,25 @@
 table: silver.payments
-purpose: ""
-grain: ""
-primary_key: []
-owner: ""
-lineage: []
-classification: ""
-required_columns: []
-column_types: {}
+purpose: Conservar pagos con montos no negativos y finitos.
+grain: Una fila por order_id y payment_sequential.
+primary_key: [order_id, payment_sequential]
+owner: Equipo de datos Pudubella
+lineage: [bronze.payments]
+classification: interno
+required_columns:
+  - order_id
+  - payment_sequential
+  - payment_value
+column_types:
+  order_id: string
+  payment_sequential: integer
+  payment_value: float
 allow_empty: false
-constraints: {}
+constraints:
+  order_id:
+    nullable: false
+  payment_sequential:
+    nullable: false
+  payment_value:
+    nullable: false
+    minimum: 0
+    finite: true
