@@ -2,6 +2,7 @@
 
 import numpy as np
 import polars as pl
+from sklearn.neighbors import NearestNeighbors
 
 
 def vecinos_mas_cercanos(
@@ -19,6 +20,15 @@ def vecinos_mas_cercanos(
     mayor distancia, y no incluye a la consulta. Si `consulta` no está en
     `nombres`, levanta `KeyError`.
     """
-    raise NotImplementedError(
-        "Completen vecinos_mas_cercanos antes de ejecutar el programa."
+    if consulta not in nombres:
+        raise KeyError(consulta)
+    i = nombres.index(consulta)
+    modelo = NearestNeighbors(n_neighbors=k + 1, metric=metrica).fit(X)
+    distancias, indices = modelo.kneighbors(X[i : i + 1])
+    resultado = pl.DataFrame(
+        {
+            "name": [nombres[j] for j in indices[0]],
+            "distancia": distancias[0],
+        }
     )
+    return resultado.filter(pl.col("name") != consulta).head(k)
