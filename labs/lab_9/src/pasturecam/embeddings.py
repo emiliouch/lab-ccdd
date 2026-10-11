@@ -16,9 +16,16 @@ def dividir_en_tiles(imagen: Image.Image, n: int) -> list[Image.Image]:
     para cubrir el resto que deja la división entera. Juntos, los tiles
     cubren exactamente el cuadrante original.
     """
-    raise NotImplementedError(
-        "Completen dividir_en_tiles antes de ejecutar el programa."
-    )
+    if n < 1:
+        raise ValueError(f"n debe ser al menos 1, se recibió {n}.")
+    ancho_tile = imagen.width // n
+    tiles = []
+    for i in range(n):
+        izquierda = i * ancho_tile
+        # El último tile llega hasta el borde para absorber el resto.
+        derecha = imagen.width if i == n - 1 else (i + 1) * ancho_tile
+        tiles.append(imagen.crop((izquierda, 0, derecha, imagen.height)))
+    return tiles
 
 
 def extraer_embeddings(
@@ -38,6 +45,13 @@ def extraer_embeddings(
     calcular gradientes. El resultado es un arreglo `(len(rutas),
     dimensión)`.
     """
-    raise NotImplementedError(
-        "Completen extraer_embeddings antes de ejecutar el programa."
-    )
+    lotes = []
+    with torch.no_grad():
+        for inicio in range(0, len(rutas), tamano_lote):
+            tensores = []
+            for ruta in rutas[inicio : inicio + tamano_lote]:
+                with Image.open(ruta) as imagen:
+                    tensores.append(transformacion(imagen.convert("RGB")))
+            salida = modelo(torch.stack(tensores))
+            lotes.append(salida.detach().cpu().numpy())
+    return np.concatenate(lotes, axis=0)
