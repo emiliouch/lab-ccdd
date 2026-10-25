@@ -1,8 +1,21 @@
 """Limpieza y partición de las letras de MoodyLyrics4Q."""
 
+import re
 from collections.abc import Sequence
 
 import numpy as np
+from sklearn.model_selection import StratifiedGroupKFold
+
+# Marca entre corchetes: un "[" seguido de cualquier cosa que no sea otro
+# corchete, hasta el "]". Excluir los corchetes del contenido evita que un
+# corchete suelto (como el "p[lace" de ML271) se coma texto hasta la
+# siguiente marca.
+PATRON_CORCHETES = r"\[[^\[\]]*\]"
+# Marca de sección entre paréntesis: "(" + una palabra clave completa (el
+# \b impide que "(Introducing" cuente como "(Intro") + lo que siga hasta ")".
+PATRON_SECCION = (
+    r"(?i)\((?:chorus|verse|bridge|intro|outro|instrumental)\b[^()]*\)"
+)
 
 
 def limpiar_letra(texto: str) -> str:
@@ -19,9 +32,9 @@ def limpiar_letra(texto: str) -> str:
     inicio ni al final, y aplicar la función dos veces da lo mismo que
     aplicarla una.
     """
-    raise NotImplementedError(
-        "Completen limpiar_letra antes de ejecutar el programa."
-    )
+    sin_corchetes = re.sub(PATRON_CORCHETES, " ", texto)
+    sin_marcas = re.sub(PATRON_SECCION, " ", sin_corchetes)
+    return re.sub(r"\s+", " ", sin_marcas).strip()
 
 
 def separar_test(
@@ -37,6 +50,11 @@ def separar_test(
     `StratifiedGroupKFold` con cinco particiones, `shuffle=True` y
     `random_state=0`, y el test es la primera de ellas.
     """
-    raise NotImplementedError(
-        "Completen separar_test antes de ejecutar el programa."
+    artistas = np.asarray(artistas)
+    estados = np.asarray(estados)
+    particiones = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=0)
+    # `split` solo usa el largo de X: las letras no hacen falta para partir.
+    train_val, test = next(
+        particiones.split(np.zeros(len(estados)), estados, groups=artistas)
     )
+    return train_val, test
