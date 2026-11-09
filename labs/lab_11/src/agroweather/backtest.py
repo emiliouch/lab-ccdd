@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import lightgbm
 import numpy as np
@@ -52,9 +53,63 @@ def temporal_split(
     Rechaza largos distintos, ausencia de `hora` de tipo fecha, entradas
     vacías, horizonte menor que 1, cortes invertidos y particiones vacías.
     """
-    raise NotImplementedError(
-        "Completen temporal_split antes de ejecutar esta celda."
+    # --- validaciones de entrada ---
+    if horizonte < 1:
+        raise ValueError("horizonte debe ser al menos 1")
+    if X.height != y.len():
+        raise ValueError("X e y deben tener el mismo largo")
+    if X.height == 0:
+        raise ValueError("X e y no pueden estar vacíos")
+    if "hora" not in X.columns or not isinstance(X.schema["hora"], pl.Datetime):
+        raise ValueError("X debe incluir la columna hora de tipo fecha")
+
+    zona = X.schema["hora"].time_zone  # None si la columna no tiene zona
+
+    def a_datetime(corte: str | datetime) -> datetime:
+        """Lleva el corte a un datetime comparable con la columna `hora`."""
+        if isinstance(corte, str):
+            corte = datetime.fromisoformat(corte)
+        if zona is None:
+            if corte.tzinfo is not None:
+                raise ValueError("hora no tiene zona, pero el corte sí")
+            return corte
+        if corte.tzinfo is None:
+            return corte.replace(tzinfo=ZoneInfo(zona))
+        return corte.astimezone(ZoneInfo(zona))
+
+    inicio_val = a_datetime(inicio_validation)
+    inicio_te = a_datetime(inicio_test)
+    if inicio_val >= inicio_te:
+        raise ValueError("inicio_validation debe ser anterior a inicio_test")
+
+    paso = timedelta(hours=horizonte)
+
+    def antes_del_corte(corte: datetime) -> datetime:
+        """Resta el horizonte en tiempo absoluto (sin saltos por cambio de hora)."""
+        if zona is None:
+            return corte - paso
+        return (corte.astimezone(UTC) - paso).astimezone(ZoneInfo(zona))
+
+    primer_origen_validation = antes_del_corte(inicio_val)
+    primer_origen_test = antes_del_corte(inicio_te)
+
+    # --- asignación por la hora del target, con purga en ambas fronteras ---
+    hora_target = X["hora"] + paso
+    en_train = hora_target < primer_origen_validation
+    en_validation = (hora_target >= inicio_val) & (
+        hora_target < primer_origen_test
     )
+    en_test = hora_target >= inicio_te
+
+    partes = {
+        "train": (X.filter(en_train), y.filter(en_train)),
+        "validation": (X.filter(en_validation), y.filter(en_validation)),
+        "test": (X.filter(en_test), y.filter(en_test)),
+    }
+    for nombre, (X_parte, _) in partes.items():
+        if X_parte.height == 0:
+            raise ValueError(f"La partición {nombre} quedó vacía")
+    return partes
 
 
 def rmse(y_real: pl.Series, y_pred: pl.Series) -> float:
@@ -150,9 +205,25 @@ def daily_persistence_forecast(
     notebook, esas filas se excluyen de todas ellas; las features con
     faltantes se conservan para LightGBM.
     """
-    raise NotImplementedError(
-        "Completen daily_persistence_forecast antes de ejecutar esta celda."
+    if not 1 <= horizonte <= 24:
+        raise ValueError("horizonte debe estar entre 1 y 24")
+    if "hora" not in X.columns:
+        raise ValueError("X debe incluir la columna hora")
+    if not {"hora", "temp"} <= set(temperaturas.columns):
+        raise ValueError("temperaturas debe incluir las columnas hora y temp")
+    if temperaturas["hora"].is_duplicated().any():
+        raise ValueError("temperaturas no puede tener horas duplicadas")
+
+    # Hora de ayer a la hora del target: hora + horizonte - 24.
+    hora_ayer = X["hora"] + timedelta(hours=horizonte - 24)
+    ayer = pl.DataFrame({"hora": hora_ayer}).join(
+        temperaturas.select("hora", "temp"),
+        on="hora",
+        how="left",
+        maintain_order="left",
     )
+    # Si ayer no se observó, queda null: no se rellena.
+    return ayer["temp"].alias("pronostico")
 
 
 def climatology_forecast(
@@ -170,9 +241,49 @@ def climatology_forecast(
     no aparece en train, usa la media general de train. Devuelve una serie
     `pronostico` con una fila por cada fila de `X`.
     """
-    raise NotImplementedError(
-        "Completen climatology_forecast antes de ejecutar esta celda."
+    if horizonte < 1:
+        raise ValueError("horizonte debe ser al menos 1")
+    if X_train.height != y_train.len():
+        raise ValueError("X_train e y_train deben tener el mismo largo")
+    if X_train.height == 0:
+        raise ValueError("X_train no puede estar vacío")
+    if y_train.null_count() == y_train.len():
+        raise ValueError("y_train no tiene valores observados")
+    for nombre, tabla in (("X_train", X_train), ("X", X)):
+        if "hora" not in tabla.columns:
+            raise ValueError(f"{nombre} debe incluir la columna hora")
+
+    paso = timedelta(hours=horizonte)
+
+    # Media de train por mes y hora del target (no del origen).
+    hora_target_train = X_train["hora"] + paso
+    promedios = (
+        pl.DataFrame(
+            {
+                "mes": hora_target_train.dt.month(),
+                "hora_del_dia": hora_target_train.dt.hour(),
+                "temp": y_train,
+            }
+        )
+        .group_by("mes", "hora_del_dia")
+        .agg(pl.col("temp").mean().alias("climatologia"))
     )
+    media_general = y_train.mean()
+
+    hora_target = X["hora"] + paso
+    pronostico = pl.DataFrame(
+        {
+            "mes": hora_target.dt.month(),
+            "hora_del_dia": hora_target.dt.hour(),
+        }
+    ).join(
+        promedios,
+        on=["mes", "hora_del_dia"],
+        how="left",
+        maintain_order="left",
+    )["climatologia"]
+    # Combinación mes-hora ausente en train: media general de train.
+    return pronostico.fill_null(media_general).alias("pronostico")
 
 
 def make_expanding_folds(
