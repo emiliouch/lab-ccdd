@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import lightgbm
 import numpy as np
 import polars as pl
+from sklearn.base import clone
+
+
+def _como_fecha(corte: str | datetime, hora: pl.Series) -> datetime:
+    """Convierte un corte a `datetime` en la zona horaria de `hora`."""
+    if isinstance(corte, str):
+        corte = datetime.fromisoformat(corte)
+    zona = getattr(hora.dtype, "time_zone", None)
+    if corte.tzinfo is None and zona is not None:
+        corte = corte.replace(tzinfo=ZoneInfo(zona))
+    return corte
+
+
+def _validar_hora(X: pl.DataFrame) -> None:
+    """Exige una columna `hora` de tipo fecha."""
+    if "hora" not in X.columns or not isinstance(X.schema["hora"], pl.Datetime):
+        raise ValueError("X debe incluir una columna hora de tipo fecha")
 
 
 def make_model(**params) -> lightgbm.LGBMRegressor:
@@ -53,62 +70,37 @@ def temporal_split(
     Rechaza largos distintos, ausencia de `hora` de tipo fecha, entradas
     vacías, horizonte menor que 1, cortes invertidos y particiones vacías.
     """
-    # --- validaciones de entrada ---
-    if horizonte < 1:
-        raise ValueError("horizonte debe ser al menos 1")
     if X.height != y.len():
         raise ValueError("X e y deben tener el mismo largo")
     if X.height == 0:
         raise ValueError("X e y no pueden estar vacíos")
-    if "hora" not in X.columns or not isinstance(X.schema["hora"], pl.Datetime):
-        raise ValueError("X debe incluir la columna hora de tipo fecha")
+    _validar_hora(X)
+    if horizonte < 1:
+        raise ValueError("El horizonte debe ser al menos 1")
 
-    zona = X.schema["hora"].time_zone  # None si la columna no tiene zona
+    inicio_validation = _como_fecha(inicio_validation, X["hora"])
+    inicio_test = _como_fecha(inicio_test, X["hora"])
+    if inicio_test <= inicio_validation:
+        raise ValueError("inicio_test debe ser posterior a inicio_validation")
 
-    def a_datetime(corte: str | datetime) -> datetime:
-        """Lleva el corte a un datetime comparable con la columna `hora`."""
-        if isinstance(corte, str):
-            corte = datetime.fromisoformat(corte)
-        if zona is None:
-            if corte.tzinfo is not None:
-                raise ValueError("hora no tiene zona, pero el corte sí")
-            return corte
-        if corte.tzinfo is None:
-            return corte.replace(tzinfo=ZoneInfo(zona))
-        return corte.astimezone(ZoneInfo(zona))
+    adelanto = timedelta(hours=horizonte)
+    hora_target = X["hora"] + adelanto
+    primer_origen_validation = inicio_validation - adelanto
+    primer_origen_test = inicio_test - adelanto
 
-    inicio_val = a_datetime(inicio_validation)
-    inicio_te = a_datetime(inicio_test)
-    if inicio_val >= inicio_te:
-        raise ValueError("inicio_validation debe ser anterior a inicio_test")
-
-    paso = timedelta(hours=horizonte)
-
-    def antes_del_corte(corte: datetime) -> datetime:
-        """Resta el horizonte en tiempo absoluto (sin saltos por cambio de hora)."""
-        if zona is None:
-            return corte - paso
-        return (corte.astimezone(UTC) - paso).astimezone(ZoneInfo(zona))
-
-    primer_origen_validation = antes_del_corte(inicio_val)
-    primer_origen_test = antes_del_corte(inicio_te)
-
-    # --- asignación por la hora del target, con purga en ambas fronteras ---
-    hora_target = X["hora"] + paso
-    en_train = hora_target < primer_origen_validation
-    en_validation = (hora_target >= inicio_val) & (
-        hora_target < primer_origen_test
-    )
-    en_test = hora_target >= inicio_te
-
-    partes = {
-        "train": (X.filter(en_train), y.filter(en_train)),
-        "validation": (X.filter(en_validation), y.filter(en_validation)),
-        "test": (X.filter(en_test), y.filter(en_test)),
+    mascaras = {
+        "train": hora_target < primer_origen_validation,
+        "validation": (hora_target >= inicio_validation)
+        & (hora_target < primer_origen_test),
+        "test": hora_target >= inicio_test,
     }
-    for nombre, (X_parte, _) in partes.items():
+
+    partes = {}
+    for nombre, mascara in mascaras.items():
+        X_parte = X.filter(mascara)
         if X_parte.height == 0:
             raise ValueError(f"La partición {nombre} quedó vacía")
+        partes[nombre] = (X_parte, y.filter(mascara))
     return partes
 
 
@@ -206,24 +198,19 @@ def daily_persistence_forecast(
     faltantes se conservan para LightGBM.
     """
     if not 1 <= horizonte <= 24:
-        raise ValueError("horizonte debe estar entre 1 y 24")
-    if "hora" not in X.columns:
-        raise ValueError("X debe incluir la columna hora")
+        raise ValueError("El horizonte debe estar entre 1 y 24 horas")
+    _validar_hora(X)
     if not {"hora", "temp"} <= set(temperaturas.columns):
-        raise ValueError("temperaturas debe incluir las columnas hora y temp")
-    if temperaturas["hora"].is_duplicated().any():
-        raise ValueError("temperaturas no puede tener horas duplicadas")
+        raise ValueError("temperaturas debe incluir hora y temp")
 
-    # Hora de ayer a la hora del target: hora + horizonte - 24.
-    hora_ayer = X["hora"] + timedelta(hours=horizonte - 24)
-    ayer = pl.DataFrame({"hora": hora_ayer}).join(
+    hora_target = X["hora"] + timedelta(hours=horizonte)
+    ayer = pl.DataFrame({"hora": hora_target - timedelta(hours=24)})
+    return ayer.join(
         temperaturas.select("hora", "temp"),
         on="hora",
         how="left",
         maintain_order="left",
-    )
-    # Si ayer no se observó, queda null: no se rellena.
-    return ayer["temp"].alias("pronostico")
+    )["temp"].alias("pronostico")
 
 
 def climatology_forecast(
@@ -241,22 +228,17 @@ def climatology_forecast(
     no aparece en train, usa la media general de train. Devuelve una serie
     `pronostico` con una fila por cada fila de `X`.
     """
-    if horizonte < 1:
-        raise ValueError("horizonte debe ser al menos 1")
     if X_train.height != y_train.len():
         raise ValueError("X_train e y_train deben tener el mismo largo")
     if X_train.height == 0:
         raise ValueError("X_train no puede estar vacío")
-    if y_train.null_count() == y_train.len():
-        raise ValueError("y_train no tiene valores observados")
-    for nombre, tabla in (("X_train", X_train), ("X", X)):
-        if "hora" not in tabla.columns:
-            raise ValueError(f"{nombre} debe incluir la columna hora")
+    if horizonte < 1:
+        raise ValueError("El horizonte debe ser al menos 1")
+    _validar_hora(X_train)
+    _validar_hora(X)
 
-    paso = timedelta(hours=horizonte)
-
-    # Media de train por mes y hora del target (no del origen).
-    hora_target_train = X_train["hora"] + paso
+    adelanto = timedelta(hours=horizonte)
+    hora_target_train = X_train["hora"] + adelanto
     promedios = (
         pl.DataFrame(
             {
@@ -268,22 +250,24 @@ def climatology_forecast(
         .group_by("mes", "hora_del_dia")
         .agg(pl.col("temp").mean().alias("climatologia"))
     )
-    media_general = y_train.mean()
 
-    hora_target = X["hora"] + paso
-    pronostico = pl.DataFrame(
-        {
-            "mes": hora_target.dt.month(),
-            "hora_del_dia": hora_target.dt.hour(),
-        }
-    ).join(
-        promedios,
-        on=["mes", "hora_del_dia"],
-        how="left",
-        maintain_order="left",
-    )["climatologia"]
-    # Combinación mes-hora ausente en train: media general de train.
-    return pronostico.fill_null(media_general).alias("pronostico")
+    hora_target = X["hora"] + adelanto
+    return (
+        pl.DataFrame(
+            {
+                "mes": hora_target.dt.month(),
+                "hora_del_dia": hora_target.dt.hour(),
+            }
+        )
+        .join(
+            promedios,
+            on=["mes", "hora_del_dia"],
+            how="left",
+            maintain_order="left",
+        )["climatologia"]
+        .fill_null(y_train.mean())
+        .alias("pronostico")
+    )
 
 
 def make_expanding_folds(
@@ -301,9 +285,34 @@ def make_expanding_folds(
     `indice` es la columna `hora` de `X`. Devuelve posiciones enteras de esa
     columna, no fechas: son las que usa `walk_forward` para seleccionar filas.
     """
-    raise NotImplementedError(
-        "Completen make_expanding_folds antes de ejecutar esta celda."
-    )
+    if indice.len() == 0:
+        raise ValueError("indice no puede estar vacío")
+    if not isinstance(indice.dtype, pl.Datetime):
+        raise ValueError("indice debe ser una columna de tipo fecha")
+    if len(anios) == 0:
+        raise ValueError("Debe indicar al menos un año")
+    if purga_horas < 0:
+        raise ValueError("purga_horas no puede ser negativa")
+
+    zona = indice.dtype.time_zone
+    tz = ZoneInfo(zona) if zona is not None else None
+    purga = timedelta(hours=purga_horas)
+
+    resultado = []
+    for anio in anios:
+        inicio = datetime(anio, 1, 1, tzinfo=tz)
+        fin = datetime(anio + 1, 1, 1, tzinfo=tz)
+        en_train = indice < inicio - purga
+        en_validation = (indice >= inicio) & (indice < fin)
+
+        indices_train = np.flatnonzero(en_train.to_numpy())
+        indices_validation = np.flatnonzero(en_validation.to_numpy())
+        if indices_train.size == 0:
+            raise ValueError(f"El train del año {anio} quedó vacío")
+        if indices_validation.size == 0:
+            raise ValueError(f"La validation del año {anio} quedó vacía")
+        resultado.append((indices_train, indices_validation))
+    return resultado
 
 
 def walk_forward(
@@ -320,9 +329,48 @@ def walk_forward(
     Devuelve una tabla con las columnas `hora` (el origen), `fold`, `real` y
     `pronostico`.
     """
-    raise NotImplementedError(
-        "Completen walk_forward antes de ejecutar esta celda."
-    )
+    if X.height != y.len():
+        raise ValueError("X e y deben tener el mismo largo")
+    if "hora" not in X.columns:
+        raise ValueError("X debe incluir la columna hora")
+    if len(folds) == 0:
+        raise ValueError("Debe entregar al menos un fold")
+
+    columnas = [columna for columna in X.columns if columna != "hora"]
+    tablas = []
+    for numero, (indices_train, indices_validation) in enumerate(
+        folds, start=1
+    ):
+        indices_train = np.asarray(indices_train, dtype=np.int64)
+        indices_validation = np.asarray(indices_validation, dtype=np.int64)
+        if indices_train.size == 0 or indices_validation.size == 0:
+            raise ValueError(f"El fold {numero} tiene una partición vacía")
+        if indices_train.max() >= indices_validation.min():
+            raise ValueError(
+                f"El train del fold {numero} no puede incluir validation "
+                "ni filas posteriores a su inicio"
+            )
+
+        X_train = X[indices_train]
+        X_validation = X[indices_validation]
+        modelo_fold = clone(modelo)
+        modelo_fold.fit(X_train.select(columnas), y.gather(indices_train))
+        pronostico = np.asarray(
+            modelo_fold.predict(X_validation.select(columnas)), dtype=float
+        )
+        tablas.append(
+            pl.DataFrame(
+                {
+                    "hora": X_validation["hora"],
+                    "fold": pl.Series(
+                        [numero] * X_validation.height, dtype=pl.Int64
+                    ),
+                    "real": y.gather(indices_validation).cast(pl.Float64),
+                    "pronostico": pronostico,
+                }
+            )
+        )
+    return pl.concat(tablas)
 
 
 def recall_evento(real: pl.Series, alerta: pl.Series) -> float:
@@ -379,6 +427,25 @@ def mejor_umbral(
     pronóstico es menor que el umbral. El umbral se elige en validation y se
     aplica una sola vez en test.
     """
-    raise NotImplementedError(
-        "Completen mejor_umbral antes de ejecutar esta celda."
-    )
+    real = np.asarray(real, dtype=bool)
+    pronostico = np.asarray(pronostico, dtype=float)
+    if real.shape != pronostico.shape:
+        raise ValueError("real y pronostico deben tener el mismo largo")
+    if real.size == 0:
+        raise ValueError("No hay noches para elegir el umbral")
+    if np.isnan(pronostico).any():
+        raise ValueError("pronostico no puede tener valores faltantes")
+
+    mejor = None
+    # Candidatos de menor a mayor: ante un empate queda el umbral más bajo,
+    # es decir, el primero que alcanza el costo mínimo.
+    for candidato in np.unique(pronostico):
+        costo = costo_alerta(
+            real,
+            pronostico < candidato,
+            costo_por_alerta=costo_por_alerta,
+            costo_helada=costo_helada,
+        )
+        if mejor is None or costo < mejor[1]:
+            mejor = (float(candidato), costo)
+    return mejor
