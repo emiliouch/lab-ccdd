@@ -1,2 +1,12 @@
-# Completen este archivo siguiendo la sección 3.1 del notebook: una entrada por
-# línea con lo que Docker no debe enviar al construir la imagen.
+.env
+.venv
+data
+notebooks
+tests
+scripts
+.git
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.ruff_cache/
