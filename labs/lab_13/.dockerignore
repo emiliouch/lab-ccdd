@@ -1,0 +1,12 @@
+.env
+.venv
+data
+notebooks
+tests
+scripts
+.git
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.ruff_cache/
